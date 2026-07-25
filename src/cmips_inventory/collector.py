@@ -9,7 +9,8 @@ import concurrent.futures
 from difflib import get_close_matches
 from typing import List, Dict, Any, Optional, Callable
 
-from cmips_inventory.auth import get_account_id, get_enabled_regions
+from cmips_inventory.auth import (get_account_id, get_enabled_regions,
+                                  get_enabled_regions_with_source)
 from cmips_inventory.collectors.s3 import collect_s3_resources
 
 
@@ -334,10 +335,10 @@ def collect_all(
     service_list = sorted(service_list)
 
     # Determine regions
+    enabled, region_source, region_source_error = get_enabled_regions_with_source(session)
     if regions:
         region_list = regions
         # Validate requested regions
-        enabled = get_enabled_regions(session)
         unknown_regions = [r for r in region_list if r not in enabled]
         if unknown_regions:
             msgs = []
@@ -349,7 +350,7 @@ def collect_all(
                 msgs.append(msg)
             raise ValueError('\n'.join(msgs))
     else:
-        region_list = get_enabled_regions(session)
+        region_list = enabled
 
     # Determine which global services to include based on region filter
     # - No region filter: include all global services
@@ -462,6 +463,9 @@ def collect_all(
             'services_scanned': len(service_list),
             'services_scanned_list': service_list,
             'regions_scanned': len(region_list),
+            'regions_scanned_list': sorted(region_list),
+            'region_source': region_source,
+            'region_source_error': region_source_error,
             'resource_count': len(all_resources)
         },
         'resources': all_resources

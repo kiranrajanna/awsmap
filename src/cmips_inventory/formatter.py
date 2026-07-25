@@ -76,6 +76,9 @@ def format_html(data: Dict[str, Any]) -> str:
     timestamp = metadata.get('timestamp', '')
     duration = metadata.get('scan_duration_seconds', 0)
     total_resources = len(resources)
+    scanned_regions = metadata.get('regions_scanned_list') or []
+    region_source = metadata.get('region_source', '')
+    region_source_error = metadata.get('region_source_error')
 
     # Group by service
     services = {}
@@ -257,6 +260,48 @@ def format_html(data: Dict[str, Any]) -> str:
         f'<div class="stat-bar"><span class="stat-label">{esc(reg)}</span><div class="bar region-bar" style="width: {min(100, count*100//max(1,total_resources))}%"></div><span class="stat-value">{count}</span></div>'
         for reg, count in top_regions
     )
+
+    # Build region coverage: every region the scan visited, including the ones
+    # that came back empty, so "scanned and empty" is distinguishable from
+    # "never scanned". Regions holding resources but missing from the scanned
+    # list (e.g. an older scan without the metadata) are still listed.
+    coverage_regions = sorted(set(scanned_regions) | {r for r in regions if r != 'global'})
+    empty_regions = [r for r in coverage_regions if not regions.get(r)]
+    coverage_rows = ''.join(
+        '<div class="coverage-item{cls}"><span class="coverage-region">{reg}</span>'
+        '<span class="coverage-count">{count}</span></div>'.format(
+            cls='' if regions.get(reg) else ' empty',
+            reg=esc(reg),
+            count=f'{regions.get(reg, 0):,}' if regions.get(reg) else 'none',
+        )
+        for reg in coverage_regions
+    )
+    if regions.get('global'):
+        coverage_rows = (
+            f'<div class="coverage-item"><span class="coverage-region">global</span>'
+            f'<span class="coverage-count">{regions["global"]:,}</span></div>' + coverage_rows
+        )
+
+    coverage_note = (
+        f'Scanned {len(coverage_regions)} regions &middot; '
+        f'{len(coverage_regions) - len(empty_regions)} with resources &middot; '
+        f'{len(empty_regions)} empty'
+        if coverage_regions else 'Region coverage not recorded for this scan.'
+    )
+
+    fallback_banner = ''
+    if region_source == 'fallback':
+        fallback_banner = (
+            '<div class="warning-banner"><strong>Incomplete region coverage.</strong> '
+            'The AWS Account API could not be queried, so this scan used a built-in '
+            'list of {n} common regions instead of your account\'s enabled regions. '
+            'Opt-in regions were <em>not</em> scanned and resources there are missing '
+            'from this report. Grant <code>account:ListRegions</code> to the scanning '
+            'principal and re-run.{detail}</div>'
+        ).format(
+            n=len(scanned_regions),
+            detail=f'<div class="warning-detail">{esc(region_source_error)}</div>' if region_source_error else '',
+        )
 
     html = f'''<!DOCTYPE html>
 <html lang="en">
@@ -860,6 +905,75 @@ def format_html(data: Dict[str, Any]) -> str:
             margin-top: 6px;
         }}
 
+        .warning-banner {{
+            background: #fff4e5;
+            border: 1px solid #f0a13a;
+            border-left: 4px solid #ec7211;
+            color: #4a2c00;
+            border-radius: 8px;
+            padding: 14px 18px;
+            margin: 20px 0;
+            font-size: 13px;
+            line-height: 1.5;
+        }}
+
+        .dark .warning-banner {{
+            background: #3a2a12;
+            border-color: #a4691f;
+            border-left-color: #ec7211;
+            color: #f0d9b5;
+        }}
+
+        .warning-banner code {{
+            font-family: monospace;
+            background: rgba(0, 0, 0, 0.08);
+            padding: 1px 5px;
+            border-radius: 3px;
+        }}
+
+        .dark .warning-banner code {{ background: rgba(255, 255, 255, 0.12); }}
+
+        .warning-detail {{
+            margin-top: 8px;
+            font-family: monospace;
+            font-size: 11px;
+            opacity: 0.75;
+            word-break: break-word;
+        }}
+
+        .coverage-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+            gap: 8px;
+            margin-top: 12px;
+        }}
+
+        .coverage-item {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 10px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 12px;
+        }}
+
+        .subtitle-note {{
+            font-size: 12px;
+            color: var(--text-muted);
+        }}
+
+        .coverage-region {{ font-family: monospace; }}
+        .coverage-count {{ font-weight: 700; }}
+
+        .coverage-item.empty {{ opacity: 0.55; }}
+        .coverage-item.empty .coverage-count {{
+            font-weight: 400;
+            font-style: italic;
+            color: var(--text-muted);
+        }}
+
         @media (max-width: 768px) {{
             header h1 {{ font-size: 20px; }}
             .meta-info {{ flex-direction: column; gap: 8px; }}
@@ -890,8 +1004,11 @@ def format_html(data: Dict[str, Any]) -> str:
                 <span class="meta-item">Account: {esc(account_id)}</span>
                 <span class="meta-item">Generated: {esc(timestamp)}</span>
                 <span class="meta-item">Duration: {duration}s</span>
+                <span class="meta-item">Regions scanned: {len(coverage_regions) or len(regions)}</span>
             </div>
         </header>
+
+        {fallback_banner}
 
         <div class="stats-grid">
             <div class="stat-card">
@@ -904,7 +1021,7 @@ def format_html(data: Dict[str, Any]) -> str:
             </div>
             <div class="stat-card">
                 <div class="number" id="stat-regions">{len(regions)}</div>
-                <div class="label">Regions</div>
+                <div class="label">Regions With Resources</div>
             </div>
             <div class="stat-card">
                 <div class="number" id="stat-types">{len(resource_types)}</div>
@@ -921,6 +1038,12 @@ def format_html(data: Dict[str, Any]) -> str:
                 <h3>Top Regions</h3>
                 <div id="chart-regions">{region_stats}</div>
             </div>
+        </div>
+
+        <div class="chart-card">
+            <h3>Region Coverage</h3>
+            <div class="subtitle-note">{coverage_note}</div>
+            <div class="coverage-grid">{coverage_rows}</div>
         </div>
 
         <div class="controls">

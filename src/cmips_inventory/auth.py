@@ -4,7 +4,7 @@ AWS authentication and session management.
 
 import boto3
 import botocore.exceptions
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 
 def create_session(profile_name: Optional[str] = None, region: Optional[str] = None) -> boto3.Session:
@@ -68,15 +68,36 @@ def get_account_id(session: boto3.Session) -> str:
     return sts_client.get_caller_identity()['Account']
 
 
-def get_enabled_regions(session: boto3.Session) -> List[str]:
+# Used only when the Account API cannot be reached. This list is incomplete by
+# design - it omits opt-in regions - so a scan that falls back to it may miss
+# resources. Callers should surface FALLBACK_REGIONS_SOURCE in their output.
+_FALLBACK_REGIONS = [
+    'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
+    'eu-west-1', 'eu-west-2', 'eu-west-3', 'eu-central-1', 'eu-north-1',
+    'ap-northeast-1', 'ap-northeast-2', 'ap-northeast-3',
+    'ap-southeast-1', 'ap-southeast-2', 'ap-south-1',
+    'sa-east-1', 'ca-central-1'
+]
+
+ACCOUNT_API_REGIONS_SOURCE = 'account-api'
+FALLBACK_REGIONS_SOURCE = 'fallback'
+
+
+def get_enabled_regions_with_source(session: boto3.Session) -> Tuple[List[str], str, Optional[str]]:
     """
-    Get list of enabled AWS regions for the account.
+    Get enabled regions along with how they were determined.
+
+    Knowing the source matters: when the Account API is unavailable the region
+    list silently narrows to _FALLBACK_REGIONS, which excludes opt-in regions.
+    A scan then reports "no resources" for regions it never actually visited.
 
     Args:
         session: boto3.Session to use
 
     Returns:
-        List of enabled region names
+        Tuple of (region names, source, error message).
+        Source is ACCOUNT_API_REGIONS_SOURCE or FALLBACK_REGIONS_SOURCE.
+        Error message is None unless the fallback was used.
     """
     try:
         account = session.client('account', region_name='us-east-1')
@@ -89,16 +110,23 @@ def get_enabled_regions(session: boto3.Session) -> List[str]:
             for region in page.get('Regions', []):
                 regions.append(region['RegionName'])
 
-        return sorted(regions)
-    except Exception:
-        # Fallback to common regions if list_regions fails
-        return [
-            'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
-            'eu-west-1', 'eu-west-2', 'eu-west-3', 'eu-central-1', 'eu-north-1',
-            'ap-northeast-1', 'ap-northeast-2', 'ap-northeast-3',
-            'ap-southeast-1', 'ap-southeast-2', 'ap-south-1',
-            'sa-east-1', 'ca-central-1'
-        ]
+        return sorted(regions), ACCOUNT_API_REGIONS_SOURCE, None
+    except Exception as e:
+        return list(_FALLBACK_REGIONS), FALLBACK_REGIONS_SOURCE, str(e)
+
+
+def get_enabled_regions(session: boto3.Session) -> List[str]:
+    """
+    Get list of enabled AWS regions for the account.
+
+    Args:
+        session: boto3.Session to use
+
+    Returns:
+        List of enabled region names
+    """
+    regions, _, _ = get_enabled_regions_with_source(session)
+    return regions
 
 
 def get_account_alias(session: boto3.Session) -> Optional[str]:
