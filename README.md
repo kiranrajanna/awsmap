@@ -18,6 +18,97 @@ A fast, comprehensive tool for mapping and inventorying the CMIPS AWS estate acr
   <img src="assets/demo.gif" alt="cmipsmap demo: scan, SQL query, security queries, and natural-language ask" width="100%">
 </p>
 
+## Quick Start for CMIPS Ops Engineers
+
+If you just want an inventory of a CMIPS account, this is the whole workflow.
+
+```bash
+# 1. Install (once)
+git clone https://github.com/kiranrajanna/cmipsmap.git
+cd cmipsmap
+pip install .
+
+# 2. Scan an account and open the report
+cmipsmap -p cmips-dev -f html -o cmips-dev-inventory.html
+```
+
+That produces a self-contained HTML file - no server, no dependencies. Open it in
+a browser, or attach it to a ticket. Everything is searchable and filterable by
+service, region, and tag.
+
+Every scan is also stored in a local SQLite database at `~/.cmipsmap/inventory.db`,
+so you can ask questions afterwards without re-scanning AWS:
+
+```bash
+cmipsmap tags -R Environment,Workload,Name,Contact -f html -o tag-compliance.html
+cmipsmap waste -f html -o waste.html
+cmipsmap diff --from 30d -f html -o drift.html
+cmipsmap ask show me all EC2 instances without an Environment tag
+```
+
+### Required AWS permissions
+
+The scanning principal needs read-only access plus one extra permission:
+
+| Permission | Why |
+|---|---|
+| `arn:aws:iam::aws:policy/ReadOnlyAccess` | Enumerating resources across all services |
+| `account:ListRegions` | Discovering which regions your account has enabled |
+
+`account:ListRegions` matters more than it looks. Without it, cmipsmap cannot ask
+AWS which regions are enabled and falls back to a built-in list of 17 common
+regions - **silently skipping opt-in regions such as `me-central-1` and
+`me-south-1`, where CMIPS does have resources.** When this happens the report
+shows an orange "Incomplete region coverage" banner at the top. If you see that
+banner, the inventory is incomplete; fix the permission and re-run.
+
+Minimal inline policy for the extra permission:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Effect": "Allow", "Action": "account:ListRegions", "Resource": "*" }
+  ]
+}
+```
+
+### Reading the region coverage panel
+
+Two numbers in the report mean different things, and confusing them causes
+false alarms:
+
+- **Regions scanned** (header) - how many regions cmipsmap actually visited
+- **Regions With Resources** (stat card) - how many of those held anything
+
+The **Region Coverage** panel lists every scanned region with its resource count,
+showing empty regions as `none`. A region marked `none` was scanned and is
+genuinely empty - it was not skipped. If a region is missing from that panel
+entirely, it was never scanned.
+
+### Scoping a scan to go faster
+
+A full scan of all services and all regions takes roughly 8 minutes. CMIPS
+resources concentrate heavily in `us-west-2`, so for day-to-day work:
+
+```bash
+# Faster: the regions CMIPS actually uses
+cmipsmap -p cmips-dev -r us-west-2 -r us-east-1 -f html -o cmips-dev.html
+
+# Faster still: specific services
+cmipsmap -p cmips-dev -s ec2 -s rds -s s3 -r us-west-2 -f html -o cmips-dev.html
+```
+
+Run an unscoped scan periodically so nothing deployed in an unexpected region
+goes unnoticed.
+
+### Handling report files
+
+Reports embed account IDs, resource names, ARNs, and every tag - including any
+tag whose key or value happens to hold sensitive text. Treat generated HTML,
+JSON, and CSV as internal CMIPS material: keep them out of public locations and
+out of this repository. `.gitignore` already excludes common output filenames.
+
 ## Features
 
 - **150+ AWS Services**: Covers compute, storage, database, networking, security, and more

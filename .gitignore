@@ -102,10 +102,20 @@ cython_debug/
 ehthumbs.db
 Thumbs.db
 
-# AWS Inventory output files
+# Generated reports - these embed account IDs, ARNs and tags. Never commit them.
 *_inventory_*.json
 *_inventory_*.csv
 *_inventory_*.html
+*inventory*.html
+*inventory*.json
+*inventory*.csv
+*-compliance.html
+*tag-compliance*
+*waste*.html
+*drift*.html
+*.db
+*.sqlite
+*.sqlite3
 
 # Local configuration
 .cmips-inventory/
